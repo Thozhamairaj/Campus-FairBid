@@ -14,13 +14,27 @@ interface CreateNotificationParams {
 export async function createNotification(params: CreateNotificationParams): Promise<void> {
   const { userId, type, title, message, listingId, io } = params;
 
-  const notification = await prisma.notification.create({
-    data: { userId, type, title, message, listingId },
-  });
+  try {
+    const notification = await prisma.notification.create({
+      data: { userId, type, title, message, listingId },
+    });
 
-  // Push real-time notification
-  if (io) {
-    io.to(`user:${userId}`).emit('notification:new', { notification });
+    // Push real-time notification
+    if (io) {
+      io.to(`user:${userId}`).emit('notification:new', { notification });
+    }
+  } catch (err: any) {
+    if (err.code === 'P2003' && listingId) {
+      // If listing was deleted in the interim, fallback to saving without listingId
+      try {
+        const fallback = await prisma.notification.create({
+          data: { userId, type, title, message, listingId: null },
+        });
+        if (io) io.to(`user:${userId}`).emit('notification:new', { notification: fallback });
+      } catch {}
+    } else {
+      console.error('Failed to create notification:', err.message);
+    }
   }
 }
 

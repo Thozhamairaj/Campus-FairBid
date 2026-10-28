@@ -153,7 +153,15 @@ router.get('/:id', optionalAuth, async (req: AuthenticatedRequest, res: Response
     userAutoBid = autoBid;
   }
 
-  res.json({ listing, isWatched, userAutoBid });
+  // Privacy safeguard: only return private handover details to the authorized seller or buyer
+  const isSeller = req.user?.id === listing.sellerId;
+  const isBuyer = req.user?.id === listing.handover?.buyerId;
+  const sanitizedListing = {
+    ...listing,
+    handover: (isSeller || isBuyer) ? listing.handover : null,
+  };
+
+  res.json({ listing: sanitizedListing, isWatched, userAutoBid });
 });
 
 // POST /api/listings

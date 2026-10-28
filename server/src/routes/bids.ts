@@ -43,11 +43,11 @@ router.post('/:listingId', authenticate, bidLimiter, async (req: AuthenticatedRe
     try {
       bidResult = await prisma.$transaction(async (tx) => {
         const listingRaw = await tx.$queryRaw<Array<{
-          id: string; status: string; sellerId: string; startingPrice: string;
+          id: string; title: string; status: string; sellerId: string; startingPrice: string;
           minIncrement: string; currentPrice: string | null; closingAt: Date;
           extensionCount: number;
         }>>`
-          SELECT id, status, "sellerId", "startingPrice"::text, "minIncrement"::text,
+          SELECT id, title, status, "sellerId", "startingPrice"::text, "minIncrement"::text,
                  "currentPrice"::text, "closingAt", "extensionCount"
           FROM "Listing"
           WHERE id = ${listingId}
@@ -168,11 +168,12 @@ router.post('/:listingId', authenticate, bidLimiter, async (req: AuthenticatedRe
     });
 
     if (previousBids.length > 0) {
+      const listingTitle = (updatedListing as any)?.title || 'the auction item';
       createNotification({
         userId: previousBids[0].bidderId,
         type: 'OUTBID',
         title: "You've been outbid!",
-        message: `Someone bid ₹${result.data.amount.toLocaleString('en-IN')} on an item you were leading.`,
+        message: `Someone placed a higher bid of ₹${result.data.amount.toLocaleString('en-IN')} on "${listingTitle}".`,
         listingId,
         io,
       }).catch(console.error);

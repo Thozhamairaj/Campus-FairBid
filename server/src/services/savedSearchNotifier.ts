@@ -23,6 +23,7 @@ export async function notifyMatchingSavedSearches(
   const searches = await prisma.savedSearch.findMany({
     where: {
       userId: { not: listing.sellerId }, // don't notify seller of their own listing
+      isActive: true,
       AND: [
         // Category match
         listing.category ? { OR: [{ category: null }, { category: listing.category }] } : {},

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { Heart, HeartOff, ChevronLeft, User, AlertCircle, Info, CheckCircle, XCircle, Zap, Bot } from 'lucide-react';
+import { Heart, HeartOff, ChevronLeft, User, AlertCircle, Info, CheckCircle, XCircle, Zap, Bot, Edit2, Trash2, Check, X } from 'lucide-react';
 import { formatDistanceToNow, format } from 'date-fns';
 import api from '../lib/api';
 import socket, { joinListing, leaveListing } from '../lib/socket';
@@ -51,6 +51,11 @@ export default function ListingDetailPage() {
   const [questionText, setQuestionText] = useState('');
   const [answerText, setAnswerText] = useState({});
   const [questionLoading, setQuestionLoading] = useState(false);
+  const [editingQuestionId, setEditingQuestionId] = useState(null);
+  const [editingQuestionText, setEditingQuestionText] = useState('');
+  const [editingAnswerId, setEditingAnswerId] = useState(null);
+  const [editingAnswerText, setEditingAnswerText] = useState('');
+  const [qaActionLoading, setQaActionLoading] = useState(false);
   const [fairPlay, setFairPlay] = useState(null);
   const [fairPlayLoading, setFairPlayLoading] = useState(false);
   const [extendedMsg, setExtendedMsg] = useState('');
@@ -68,7 +73,11 @@ export default function ListingDetailPage() {
     socket.on('auction:closed', handleClosed);
     socket.on('auction:decided', handleDecided);
     socket.on('question:new', handleQuestionNew);
+    socket.on('question:updated', handleQuestionUpdated);
+    socket.on('question:deleted', handleQuestionDeleted);
     socket.on('question:answered', handleAnswered);
+    socket.on('answer:updated', handleAnswerUpdated);
+    socket.on('answer:deleted', handleAnswerDeleted);
 
     return () => {
       leaveListing(id);
@@ -77,7 +86,11 @@ export default function ListingDetailPage() {
       socket.off('auction:closed', handleClosed);
       socket.off('auction:decided', handleDecided);
       socket.off('question:new', handleQuestionNew);
+      socket.off('question:updated', handleQuestionUpdated);
+      socket.off('question:deleted', handleQuestionDeleted);
       socket.off('question:answered', handleAnswered);
+      socket.off('answer:updated', handleAnswerUpdated);
+      socket.off('answer:deleted', handleAnswerDeleted);
     };
   }, [id]);
 
@@ -152,8 +165,64 @@ export default function ListingDetailPage() {
         ...prev,
         listing: {
           ...prev.listing,
-          questions: prev.listing.questions.map(q =>
+          questions: (prev.listing.questions || []).map(q =>
             q.id === questionId ? { ...q, isAnswered: true, answer } : q
+          ),
+        },
+      };
+    });
+  }
+
+  function handleQuestionUpdated({ question }) {
+    setData(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        listing: {
+          ...prev.listing,
+          questions: (prev.listing.questions || []).map(q => q.id === question.id ? question : q),
+        },
+      };
+    });
+  }
+
+  function handleQuestionDeleted({ questionId }) {
+    setData(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        listing: {
+          ...prev.listing,
+          questions: (prev.listing.questions || []).filter(q => q.id !== questionId),
+        },
+      };
+    });
+  }
+
+  function handleAnswerUpdated({ questionId, answer }) {
+    setData(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        listing: {
+          ...prev.listing,
+          questions: (prev.listing.questions || []).map(q =>
+            q.id === questionId ? { ...q, answer } : q
+          ),
+        },
+      };
+    });
+  }
+
+  function handleAnswerDeleted({ questionId }) {
+    setData(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        listing: {
+          ...prev.listing,
+          questions: (prev.listing.questions || []).map(q =>
+            q.id === questionId ? { ...q, isAnswered: false, answer: null } : q
           ),
         },
       };
@@ -235,12 +304,104 @@ export default function ListingDetailPage() {
   }
 
   async function submitAnswer(questionId) {
+    if (!answerText[questionId]?.trim() || answerText[questionId].trim().length < 2) {
+      toast.error('Answer must be at least 2 characters');
+      return;
+    }
     try {
-      await api.post(`/questions/${id}/${questionId}/answer`, { text: answerText[questionId] });
+      await api.post(`/questions/${id}/${questionId}/answer`, { text: answerText[questionId].trim() });
       setAnswerText(prev => ({ ...prev, [questionId]: '' }));
       toast.success('Answer submitted');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to submit answer');
+    }
+  }
+
+  async function submitEditQuestion(qId) {
+    if (!editingQuestionText.trim() || editingQuestionText.trim().length < 5) {
+      toast.error('Question must be at least 5 characters');
+      return;
+    }
+    setQaActionLoading(true);
+    try {
+      const { data: res } = await api.put(`/questions/${id}/${qId}`, { text: editingQuestionText.trim() });
+      setData(prev => prev ? {
+        ...prev,
+        listing: {
+          ...prev.listing,
+          questions: prev.listing.questions.map(q => q.id === qId ? res.question : q),
+        },
+      } : prev);
+      setEditingQuestionId(null);
+      toast.success('Question updated');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update question');
+    } finally {
+      setQaActionLoading(false);
+    }
+  }
+
+  async function deleteQuestion(qId) {
+    if (!window.confirm('Are you sure you want to delete this question?')) return;
+    setQaActionLoading(true);
+    try {
+      await api.delete(`/questions/${id}/${qId}`);
+      setData(prev => prev ? {
+        ...prev,
+        listing: {
+          ...prev.listing,
+          questions: prev.listing.questions.filter(q => q.id !== qId),
+        },
+      } : prev);
+      toast.success('Question deleted');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete question');
+    } finally {
+      setQaActionLoading(false);
+    }
+  }
+
+  async function submitEditAnswer(qId) {
+    if (!editingAnswerText.trim() || editingAnswerText.trim().length < 2) {
+      toast.error('Answer must be at least 2 characters');
+      return;
+    }
+    setQaActionLoading(true);
+    try {
+      const { data: res } = await api.put(`/questions/${id}/${qId}/answer`, { text: editingAnswerText.trim() });
+      setData(prev => prev ? {
+        ...prev,
+        listing: {
+          ...prev.listing,
+          questions: prev.listing.questions.map(q => q.id === qId ? { ...q, answer: res.answer } : q),
+        },
+      } : prev);
+      setEditingAnswerId(null);
+      toast.success('Answer updated');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update answer');
+    } finally {
+      setQaActionLoading(false);
+    }
+  }
+
+  async function deleteAnswer(qId) {
+    if (!window.confirm('Are you sure you want to delete this answer?')) return;
+    setQaActionLoading(true);
+    try {
+      await api.delete(`/questions/${id}/${qId}/answer`);
+      setData(prev => prev ? {
+        ...prev,
+        listing: {
+          ...prev.listing,
+          questions: prev.listing.questions.map(q => q.id === qId ? { ...q, isAnswered: false, answer: null } : q),
+        },
+      } : prev);
+      toast.success('Answer deleted');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to delete answer');
+    } finally {
+      setQaActionLoading(false);
     }
   }
 
@@ -426,58 +587,214 @@ export default function ListingDetailPage() {
                 {/* Q&A */}
                 {activeTab === 'qa' && (
                   <div>
-                    {listing.questions?.map(q => (
-                      <div key={q.id} style={{ marginBottom: 16, padding: 12, background: 'var(--color-surface-2)', borderRadius: 8 }}>
-                        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>
-                          Q: {q.text}
-                        </div>
-                        <div style={{ fontSize: 12, color: 'var(--color-navy-muted)', marginBottom: 8 }}>
-                          by {q.asker?.name} · {formatDistanceToNow(new Date(q.createdAt), { addSuffix: true })}
-                        </div>
-                        {q.answer ? (
-                          <div style={{ marginLeft: 12, paddingLeft: 12, borderLeft: '3px solid var(--color-green)' }}>
-                            <div style={{ fontSize: 13, fontWeight: 500 }}>A: {q.answer.text}</div>
-                            <div style={{ fontSize: 11, color: 'var(--color-navy-muted)' }}>by {q.answer.seller?.name}</div>
-                          </div>
-                        ) : (
-                          isSeller && (
-                            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                              <input
-                                className="form-input"
-                                style={{ flex: 1, padding: '6px 10px', fontSize: 13 }}
-                                placeholder="Type your answer..."
-                                value={answerText[q.id] || ''}
-                                onChange={e => setAnswerText(prev => ({ ...prev, [q.id]: e.target.value }))}
-                              />
-                              <button
-                                className="btn btn-primary btn-sm"
-                                onClick={() => submitAnswer(q.id)}
-                                disabled={!answerText[q.id]}
-                              >
-                                Answer
-                              </button>
-                            </div>
-                          )
-                        )}
-                        {!q.answer && !isSeller && (
-                          <div style={{ fontSize: 12, color: 'var(--color-navy-muted)', fontStyle: 'italic' }}>Awaiting seller's answer</div>
-                        )}
+                    {!listing.questions?.length ? (
+                      <div style={{ textAlign: 'center', padding: '32px 16px', color: 'var(--color-navy-muted)', fontSize: 14 }}>
+                        💬 No questions yet. Have a question about this item? Ask the seller below!
                       </div>
-                    ))}
+                    ) : (
+                      listing.questions.map(q => (
+                        <div key={q.id} style={{ marginBottom: 16, padding: 14, background: 'var(--color-surface-2)', borderRadius: 8, border: '1px solid var(--color-border)' }}>
+                          {/* Question header & actions */}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                            {editingQuestionId === q.id ? (
+                              <div style={{ flex: 1 }}>
+                                <textarea
+                                  className="form-textarea"
+                                  value={editingQuestionText}
+                                  onChange={e => setEditingQuestionText(e.target.value)}
+                                  style={{ width: '100%', minHeight: 60, fontSize: 13, padding: 8 }}
+                                  maxLength={500}
+                                />
+                                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                                  <button
+                                    className="btn btn-primary btn-sm"
+                                    onClick={() => submitEditQuestion(q.id)}
+                                    disabled={qaActionLoading || !editingQuestionText.trim()}
+                                    style={{ gap: 4 }}
+                                  >
+                                    <Check size={14} /> Save
+                                  </button>
+                                  <button
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => setEditingQuestionId(null)}
+                                    style={{ gap: 4 }}
+                                  >
+                                    <X size={14} /> Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--color-navy)', flex: 1 }}>
+                                Q: {q.text}
+                              </div>
+                            )}
+
+                            {editingQuestionId !== q.id && (
+                              <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                                {user?.id === q.asker?.id && (
+                                  <button
+                                    className="btn btn-secondary btn-icon"
+                                    style={{ padding: 4, height: 28, width: 28 }}
+                                    onClick={() => { setEditingQuestionId(q.id); setEditingQuestionText(q.text); }}
+                                    title="Edit your question"
+                                  >
+                                    <Edit2 size={13} />
+                                  </button>
+                                )}
+                                {(user?.id === q.asker?.id || isSeller || user?.role === 'ADMIN') && (
+                                  <button
+                                    className="btn btn-secondary btn-icon"
+                                    style={{ padding: 4, height: 28, width: 28, color: 'var(--color-red)' }}
+                                    onClick={() => deleteQuestion(q.id)}
+                                    title="Delete question"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          <div style={{ fontSize: 12, color: 'var(--color-navy-muted)', marginTop: 4, marginBottom: 10 }}>
+                            by <strong>{q.asker?.name}</strong> · {formatDistanceToNow(new Date(q.createdAt), { addSuffix: true })}
+                          </div>
+
+                          {/* Answer section */}
+                          {q.answer ? (
+                            <div style={{ marginLeft: 12, paddingLeft: 12, borderLeft: '3px solid var(--color-green)', marginTop: 8 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                                {editingAnswerId === q.id ? (
+                                  <div style={{ flex: 1 }}>
+                                    <textarea
+                                      className="form-textarea"
+                                      value={editingAnswerText}
+                                      onChange={e => setEditingAnswerText(e.target.value)}
+                                      style={{ width: '100%', minHeight: 60, fontSize: 13, padding: 8 }}
+                                      maxLength={1000}
+                                    />
+                                    <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                                      <button
+                                        className="btn btn-primary btn-sm"
+                                        onClick={() => submitEditAnswer(q.id)}
+                                        disabled={qaActionLoading || !editingAnswerText.trim()}
+                                        style={{ gap: 4 }}
+                                      >
+                                        <Check size={14} /> Save
+                                      </button>
+                                      <button
+                                        className="btn btn-secondary btn-sm"
+                                        onClick={() => setEditingAnswerId(null)}
+                                        style={{ gap: 4 }}
+                                      >
+                                        <X size={14} /> Cancel
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-navy)', flex: 1 }}>
+                                    A: {q.answer.text}
+                                  </div>
+                                )}
+
+                                {isSeller && editingAnswerId !== q.id && (
+                                  <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                                    <button
+                                      className="btn btn-secondary btn-icon"
+                                      style={{ padding: 4, height: 26, width: 26 }}
+                                      onClick={() => { setEditingAnswerId(q.id); setEditingAnswerText(q.answer.text); }}
+                                      title="Edit your answer"
+                                    >
+                                      <Edit2 size={12} />
+                                    </button>
+                                    <button
+                                      className="btn btn-secondary btn-icon"
+                                      style={{ padding: 4, height: 26, width: 26, color: 'var(--color-red)' }}
+                                      onClick={() => deleteAnswer(q.id)}
+                                      title="Delete answer"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                              <div style={{ fontSize: 11, color: 'var(--color-navy-muted)', marginTop: 4 }}>
+                                Answered by <strong>{q.answer.seller?.name || listing.seller?.name}</strong> (Seller)
+                              </div>
+                            </div>
+                          ) : (
+                            isSeller ? (
+                              <div style={{ marginTop: 10, padding: 10, background: 'rgba(34, 197, 94, 0.05)', borderRadius: 6, border: '1px dashed var(--color-border)' }}>
+                                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-green)', marginBottom: 6 }}>
+                                  💬 Answer as Seller:
+                                </div>
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                  <input
+                                    className="form-input"
+                                    style={{ flex: 1, padding: '6px 10px', fontSize: 13 }}
+                                    placeholder="Type your answer to this question..."
+                                    value={answerText[q.id] || ''}
+                                    onChange={e => setAnswerText(prev => ({ ...prev, [q.id]: e.target.value }))}
+                                  />
+                                  <button
+                                    className="btn btn-primary btn-sm"
+                                    onClick={() => submitAnswer(q.id)}
+                                    disabled={!answerText[q.id]?.trim()}
+                                  >
+                                    Answer
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: 12, color: 'var(--color-navy-muted)', fontStyle: 'italic', marginTop: 6 }}>
+                                ⏳ Awaiting seller's answer
+                              </div>
+                            )
+                          )}
+                        </div>
+                      ))
+                    )}
+
+                    {/* Ask a question form */}
                     {!isSeller && user && isActive && (
-                      <form onSubmit={submitQuestion} style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                        <textarea
-                          className="form-textarea"
-                          placeholder="Ask the seller a question..."
-                          value={questionText}
-                          onChange={e => setQuestionText(e.target.value)}
-                          style={{ flex: 1, minHeight: 60 }}
-                          maxLength={500}
-                        />
-                        <button className="btn btn-primary btn-sm" type="submit" disabled={questionLoading || !questionText.trim()}>
-                          Ask
-                        </button>
+                      <form onSubmit={submitQuestion} style={{ marginTop: 16, padding: 14, background: 'var(--color-surface)', borderRadius: 8, border: '1px solid var(--color-border)' }}>
+                        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, color: 'var(--color-navy)' }}>
+                          Ask the Seller a Question
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          <textarea
+                            className="form-textarea"
+                            placeholder="Ask about item specs, condition, pickup location..."
+                            value={questionText}
+                            onChange={e => setQuestionText(e.target.value)}
+                            style={{ width: '100%', minHeight: 65, fontSize: 13 }}
+                            maxLength={500}
+                          />
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: 11, color: 'var(--color-navy-muted)' }}>
+                              {questionText.length}/500 chars (min 5)
+                            </span>
+                            <button
+                              className="btn btn-primary btn-sm"
+                              type="submit"
+                              disabled={questionLoading || questionText.trim().length < 5}
+                            >
+                              {questionLoading ? 'Submitting...' : 'Post Question'}
+                            </button>
+                          </div>
+                        </div>
                       </form>
+                    )}
+
+                    {!user && (
+                      <div style={{ textAlign: 'center', marginTop: 16, padding: 12, background: 'var(--color-surface-2)', borderRadius: 8, fontSize: 13, color: 'var(--color-navy-muted)' }}>
+                        <Link to="/login" style={{ color: 'var(--color-green)', fontWeight: 600 }}>Sign in</Link> to ask a question on this listing.
+                      </div>
+                    )}
+
+                    {isSeller && (
+                      <div style={{ marginTop: 16, padding: 10, background: 'var(--color-surface-2)', borderRadius: 6, fontSize: 12, color: 'var(--color-navy-muted)', fontStyle: 'italic' }}>
+                        ℹ️ As the seller, you can answer questions asked by prospective buyers above.
+                      </div>
                     )}
                   </div>
                 )}

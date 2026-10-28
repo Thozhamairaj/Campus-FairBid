@@ -2,21 +2,24 @@ import { Decimal } from '@prisma/client/runtime/library';
 import prisma from '../lib/prisma';
 import { createNotification } from './notificationService';
 import { Server as SocketIOServer } from 'socket.io';
+import { NotificationType } from '@prisma/client';
 
 const ANTI_SNIPE_WINDOW_SECONDS = 30;
 const ANTI_SNIPE_EXTENSION_SECONDS = 60;
+
+interface PendingNotification {
+  userId: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  listingId: string;
+}
 
 /**
  * Run proxy auto-bidding engine after a new manual bid is placed.
  * 
  * Tie-breaking rule: When two auto-bids would produce the same leading amount,
  * the auto-bid registered FIRST (earliest createdAt) wins.
- * 
- * This function:
- * 1. Finds all active auto-bids for the listing
- * 2. Determines if anyone with an auto-bid should become the new leader
- * 3. Places proxy bids as necessary, respecting min increment
- * 4. Never exposes one bidder's max to another
  */
 export async function runAutoBidding(
   listingId: string,
@@ -24,14 +27,16 @@ export async function runAutoBidding(
   currentAmountOrNull: Decimal | null,
   io?: SocketIOServer
 ): Promise<void> {
-  // Get the current state of the listing with a lock
+  const pendingNotifications: PendingNotification[] = [];
+
+  // Get the current state of the listing with a row lock
   await prisma.$transaction(async (tx) => {
     const listingRaw = await tx.$queryRaw<Array<{
-      id: string; status: string; startingPrice: string;
+      id: string; title: string; status: string; startingPrice: string;
       minIncrement: string; currentPrice: string | null;
       closingAt: Date; extensionCount: number;
     }>>`
-      SELECT id, status, "startingPrice"::text, "minIncrement"::text,
+      SELECT id, title, status, "startingPrice"::text, "minIncrement"::text,
              "currentPrice"::text, "closingAt", "extensionCount"
       FROM "Listing"
       WHERE id = ${listingId}
@@ -64,90 +69,102 @@ export async function runAutoBidding(
 
     const leadingBidderId = latestBid?.bidderId || null;
 
-    // Find the highest auto-bid that isn't the trigger bidder (the one who just bid manually)
-    // Sort auto-bids to find the highest max willing to pay
+    // Sort auto-bids by highest max amount, tie-break by earlier registration
     const sortedByMax = [...autoBids].sort((a, b) => {
       const diff = new Decimal(b.maxAmount).minus(new Decimal(a.maxAmount)).toNumber();
       if (diff !== 0) return diff;
-      // Tie-break: earlier registration wins
       return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
     });
 
-    // The auto-bid winner is the one with the highest max
     const winner = sortedByMax[0];
     const runnerUp = sortedByMax[1];
 
     if (!winner) return;
 
-    // If the winner is currently leading, no action needed unless someone outbid them manually
+    // If winner is already leading, check if a manual bid triggered a need to counter
     if (leadingBidderId === winner.bidderId && triggerBidderId !== winner.bidderId) {
-      // The winner is already leading, check if they need to be bumped up
-      // by the trigger bidder's manual bid
       if (triggerBidderId && triggerBidderId !== winner.bidderId && currentPrice) {
-        // Place a counter-bid for winner if within their max
         const requiredBid = currentPrice.plus(minIncrement);
         if (new Decimal(winner.maxAmount).greaterThanOrEqualTo(requiredBid)) {
-          // Winner can counter-bid
-          await placePrxoyBid(tx, listingId, winner.bidderId, requiredBid, listing, io);
+          await placeProxyBid(tx, listingId, winner.bidderId, requiredBid, listing, leadingBidderId, pendingNotifications, io);
         }
-        // else winner is outbid and cannot respond
       }
       return;
     }
 
-    // The winner has an auto-bid. Calculate what they need to bid.
+    // Winner has an auto-bid and needs to place a proxy bid
     const baseNeeded = currentPrice ? currentPrice.plus(minIncrement) : startingPrice;
-    
+
     if (new Decimal(winner.maxAmount).lessThan(baseNeeded)) {
-      // Winner's max is not enough — they cannot auto-bid
+      // Winner's max is exhausted; queue notification for them
+      pendingNotifications.push({
+        userId: winner.bidderId,
+        type: 'OUTBID',
+        title: 'Auto-bid limit reached',
+        message: `Your maximum auto-bid of ₹${new Decimal(winner.maxAmount).toFixed(0)} on "${listing.title}" has been reached. Increase your limit to stay in the lead!`,
+        listingId,
+      });
       return;
     }
 
-    // What should winner's proxy bid be?
-    // If there's a runner-up, bid just enough to beat runner-up's max (+ increment), capped at winner's max
+    // Calculate the smallest proxy bid needed
     let proxyBidAmount: Decimal;
-    
+
     if (runnerUp) {
       const runnerUpMax = new Decimal(runnerUp.maxAmount);
       const neededToBeatRunnerUp = runnerUpMax.plus(minIncrement);
-      
+
       if (neededToBeatRunnerUp.greaterThan(new Decimal(winner.maxAmount))) {
-        // Winner's max doesn't beat runner-up by increment — use winner's full max
+        // Winner's max doesn't exceed runner-up by a full increment — use winner's full max
         proxyBidAmount = new Decimal(winner.maxAmount);
       } else {
-        // Bid just enough above runner-up's max
         proxyBidAmount = neededToBeatRunnerUp;
       }
     } else {
-      // No runner-up; bid the minimum required
       proxyBidAmount = baseNeeded;
     }
 
-    // Ensure proxy bid is at least baseNeeded
+    // Ensure proxy bid is at least baseNeeded and does not exceed winner's max
     if (proxyBidAmount.lessThan(baseNeeded)) {
       proxyBidAmount = baseNeeded;
     }
-
-    // Don't exceed winner's max
     if (proxyBidAmount.greaterThan(new Decimal(winner.maxAmount))) {
       proxyBidAmount = new Decimal(winner.maxAmount);
     }
 
-    // If already at current price (winner is already leading at this amount), skip
+    // If already at or above this amount and winner is leading, skip
     if (currentPrice && proxyBidAmount.lessThanOrEqualTo(currentPrice) && leadingBidderId === winner.bidderId) {
       return;
     }
 
-    await placePrxoyBid(tx, listingId, winner.bidderId, proxyBidAmount, listing, io);
+    await placeProxyBid(tx, listingId, winner.bidderId, proxyBidAmount, listing, leadingBidderId, pendingNotifications, io);
+
+    // If runner-up's max is now exceeded by the winner's new bid, notify runner-up
+    if (runnerUp && new Decimal(runnerUp.maxAmount).lessThanOrEqualTo(proxyBidAmount)) {
+      pendingNotifications.push({
+        userId: runnerUp.bidderId,
+        type: 'OUTBID',
+        title: 'Auto-bid limit reached',
+        message: `Your auto-bid limit of ₹${new Decimal(runnerUp.maxAmount).toFixed(0)} on "${listing.title}" was outbid. Increase your limit to bid again!`,
+        listingId,
+      });
+    }
   });
+
+  // Dispatch all notifications AFTER transaction commits to prevent deadlock on foreign keys
+  for (const notif of pendingNotifications) {
+    await createNotification({ ...notif, io });
+  }
 }
 
-async function placePrxoyBid(
+async function placeProxyBid(
   tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0],
   listingId: string,
   bidderId: string,
   amount: Decimal,
-  listing: { closingAt: Date; extensionCount: number },
+  listing: { title: string; closingAt: Date; extensionCount: number },
+  previousLeaderId: string | null,
+  pendingNotifications: PendingNotification[],
   io?: SocketIOServer
 ): Promise<void> {
   const newBid = await tx.bid.create({
@@ -174,7 +191,18 @@ async function placePrxoyBid(
     });
   }
 
-  // Broadcast
+  // Queue notification for previous leader if someone else took the lead
+  if (previousLeaderId && previousLeaderId !== bidderId) {
+    pendingNotifications.push({
+      userId: previousLeaderId,
+      type: 'OUTBID',
+      title: "You've been outbid!",
+      message: `An automatic bid of ₹${amount.toFixed(0)} has taken the lead on "${listing.title}".`,
+      listingId,
+    });
+  }
+
+  // Broadcast real-time events
   if (io) {
     io.to(`listing:${listingId}`).emit('bid:accepted', {
       bid: newBid,

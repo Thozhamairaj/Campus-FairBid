@@ -7,15 +7,15 @@ import { generateToken } from '../middleware/auth';
 const router = Router();
 
 const RegisterSchema = z.object({
-  name: z.string().min(2).max(100),
-  email: z.string().email(),
+  name: z.string().trim().min(2).max(100),
+  email: z.string().trim().toLowerCase().email(),
   password: z.string().min(6).max(100),
-  college: z.string().max(100).optional(),
-  hostel: z.string().max(100).optional(),
+  college: z.string().trim().max(100).optional(),
+  hostel: z.string().trim().max(100).optional(),
 });
 
 const LoginSchema = z.object({
-  email: z.string().email(),
+  email: z.string().trim().toLowerCase().email(),
   password: z.string().min(1),
 });
 

@@ -127,24 +127,64 @@ export default function AIAssistantPage() {
     }
   }
 
-  function handleBidClick(listing, suggestedBid) {
+  async function handleBidClick(listing, suggestedBid) {
     if (!user) {
       toast.info('Please sign in to place a bid');
+      navigate('/login');
       return;
     }
-    setPendingBid({ listing, suggestedBid });
+    try {
+      const { data } = await api.get(`/listings/${listing.id}`);
+      const latestListing = data.listing;
+      const latestCurrent = latestListing.currentPrice ? parseFloat(latestListing.currentPrice) : null;
+      const starting = parseFloat(latestListing.startingPrice);
+      const inc = parseFloat(latestListing.minIncrement);
+      const requiredMin = latestCurrent !== null ? latestCurrent + inc : starting;
+      const initialProposed = parseFloat(suggestedBid);
+
+      const hasPriceIncreased = requiredMin > initialProposed;
+      setPendingBid({
+        listing: latestListing,
+        suggestedBid: (hasPriceIncreased ? requiredMin : initialProposed).toString(),
+        hasPriceChanged: hasPriceIncreased,
+        originalBid: initialProposed,
+      });
+    } catch {
+      setPendingBid({ listing, suggestedBid, hasPriceChanged: false });
+    }
   }
 
   async function confirmBid() {
     if (!pendingBid) return;
     setBidConfirmLoading(true);
     try {
-      await api.post(`/bids/${pendingBid.listing.id}`, { amount: parseFloat(pendingBid.suggestedBid) });
-      toast.success(`Bid of ₹${parseFloat(pendingBid.suggestedBid).toLocaleString('en-IN')} placed!`);
+      // Re-verify latest price right before sending to authoritative engine
+      const { data } = await api.get(`/listings/${pendingBid.listing.id}`);
+      const latest = data.listing;
+      const latestCurrent = latest.currentPrice ? parseFloat(latest.currentPrice) : null;
+      const inc = parseFloat(latest.minIncrement);
+      const starting = parseFloat(latest.startingPrice);
+      const requiredMin = latestCurrent !== null ? latestCurrent + inc : starting;
+      const proposed = parseFloat(pendingBid.suggestedBid);
+
+      if (proposed < requiredMin) {
+        setPendingBid({
+          listing: latest,
+          suggestedBid: requiredMin.toString(),
+          hasPriceChanged: true,
+          originalBid: proposed,
+        });
+        toast.info(`The current leading price has updated. Minimum bid is now ₹${requiredMin.toLocaleString('en-IN')}. Please confirm.`);
+        setBidConfirmLoading(false);
+        return;
+      }
+
+      await api.post(`/bids/${pendingBid.listing.id}`, { amount: proposed });
+      toast.success(`Bid of ₹${proposed.toLocaleString('en-IN')} placed!`);
       setPendingBid(null);
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: `✅ Bid placed successfully on "${pendingBid.listing.title}" for ₹${parseFloat(pendingBid.suggestedBid).toLocaleString('en-IN')}! You can track it in the listing.`,
+        content: `✅ Bid placed successfully on "${pendingBid.listing.title}" for ₹${proposed.toLocaleString('en-IN')}! You can track it in the listing.`,
       }]);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to place bid');
@@ -238,6 +278,11 @@ export default function AIAssistantPage() {
           }}>
             <div className="card card-body" style={{ maxWidth: 400, width: '100%' }}>
               <h3 style={{ marginBottom: 8 }}>Confirm Your Bid</h3>
+              {pendingBid.hasPriceChanged && (
+                <div className="alert alert-warning mb-3" style={{ fontSize: 13 }}>
+                  ⚡ The current leading price on this item updated! The recalculated minimum valid bid is now <strong>₹{parseFloat(pendingBid.suggestedBid).toLocaleString('en-IN')}</strong>. Please confirm this updated amount.
+                </div>
+              )}
               <p style={{ marginBottom: 16, fontSize: 14 }}>
                 You're about to bid <strong>₹{parseFloat(pendingBid.suggestedBid).toLocaleString('en-IN')}</strong> on:
               </p>

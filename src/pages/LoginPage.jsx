@@ -19,7 +19,7 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
     setLoading(true);
-    const result = await login(form.email, form.password);
+    const result = await login(form.email.trim().toLowerCase(), form.password);
     setLoading(false);
     if (result.success) {
       toast.success(`Welcome back, ${result.user.name.split(' ')[0]}!`);
