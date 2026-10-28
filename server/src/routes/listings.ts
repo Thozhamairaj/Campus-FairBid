@@ -76,7 +76,7 @@ router.get('/', optionalAuth, async (req: AuthenticatedRequest, res: Response): 
 
   const [listings, total] = await Promise.all([
     prisma.listing.findMany({
-      where: where as Parameters<typeof prisma.listing.findMany>[0]['where'],
+      where: where as any,
       include: {
         seller: { select: { id: true, name: true, college: true } },
         images: { orderBy: { order: 'asc' }, take: 1 },
@@ -86,7 +86,7 @@ router.get('/', optionalAuth, async (req: AuthenticatedRequest, res: Response): 
       skip: (page - 1) * limit,
       take: limit,
     }),
-    prisma.listing.count({ where: where as Parameters<typeof prisma.listing.count>[0]['where'] }),
+    prisma.listing.count({ where: where as any }),
   ]);
 
   res.json({

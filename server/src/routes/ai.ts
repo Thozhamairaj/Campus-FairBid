@@ -34,11 +34,23 @@ function parseIntent(query: string): ParsedIntent {
   const intent: ParsedIntent = {};
 
   // Category detection
-  if (q.includes('cycle') || q.includes('bicycle') || q.includes('bike')) intent.category = 'BICYCLE';
-  else if (q.includes('calculator') || q.includes('calc')) intent.category = 'CALCULATOR';
-  else if (q.includes('book') || q.includes('textbook')) intent.category = 'BOOKS';
-  else if (q.includes('electronic') || q.includes('laptop') || q.includes('phone') || q.includes('charger')) intent.category = 'ELECTRONICS';
-  else if (q.includes('hostel') || q.includes('mattress') || q.includes('bucket') || q.includes('fan')) intent.category = 'HOSTEL_ESSENTIALS';
+  const categoryTerms: string[] = [];
+  if (q.includes('cycle') || q.includes('bicycle') || q.includes('bike')) {
+    intent.category = 'BICYCLE';
+    categoryTerms.push('cycle', 'bicycle', 'bike');
+  } else if (q.includes('calculator') || q.includes('calc')) {
+    intent.category = 'CALCULATOR';
+    categoryTerms.push('calculator', 'calc');
+  } else if (q.includes('book') || q.includes('textbook')) {
+    intent.category = 'BOOKS';
+    categoryTerms.push('book', 'textbook', 'books', 'textbooks');
+  } else if (q.includes('electronic') || q.includes('laptop') || q.includes('phone') || q.includes('charger') || q.includes('headphone') || q.includes('earphone')) {
+    intent.category = 'ELECTRONICS';
+    categoryTerms.push('electronic', 'electronics', 'laptop', 'phone', 'charger', 'headphone', 'headphones', 'earphone', 'earphones');
+  } else if (q.includes('hostel') || q.includes('mattress') || q.includes('bucket') || q.includes('fan')) {
+    intent.category = 'HOSTEL_ESSENTIALS';
+    categoryTerms.push('hostel', 'mattress', 'bucket', 'fan', 'essentials');
+  }
 
   // Price extraction: "under ₹2000", "below 1500", "less than 500"
   const priceMatch = q.match(/(?:under|below|less than|max|upto|up to|within)\s*[₹rs.]?\s*(\d[\d,]*)/i);
@@ -52,29 +64,46 @@ function parseIntent(query: string): ParsedIntent {
   }
 
   // Condition
-  if (q.includes('new')) intent.condition = 'NEW';
-  else if (q.includes('like new')) intent.condition = 'LIKE_NEW';
+  if (q.includes('like new')) intent.condition = 'LIKE_NEW';
+  else if (q.includes('brand new') || q.includes('new')) intent.condition = 'NEW';
   else if (q.includes('good condition') || q.includes('good')) intent.condition = 'GOOD';
   else if (q.includes('fair')) intent.condition = 'FAIR';
+  else if (q.includes('poor')) intent.condition = 'POOR';
 
   // Time preference
-  if (q.includes('today') || q.includes('closing soon') || q.includes('ending soon')) {
+  if (q.includes('today') || q.includes('closing soon') || q.includes('ending soon') || q.includes('soon')) {
     intent.closingSoon = true;
   }
 
-  // Keywords (everything not captured)
-  const words = query.split(' ').filter(w => w.length > 3 && !['under', 'below', 'than', 'less', 'with', 'that', 'this', 'have', 'need', 'want', 'find', 'show'].includes(w.toLowerCase()));
-  intent.keywords = words.slice(0, 5).join(' ');
+  // Stopwords to exclude from residual keywords
+  const stopwords = new Set([
+    'under', 'below', 'than', 'less', 'with', 'that', 'this', 'have', 'need', 'want',
+    'find', 'show', 'give', 'suggest', 'compare', 'cheapest', 'cheap', 'three', 'item',
+    'items', 'matching', 'good', 'condition', 'like', 'brand', 'poor', 'fair', 'soon',
+    'closing', 'ending', 'today', 'price', 'bids', 'bid', 'please', 'for', 'from',
+    ...categoryTerms,
+  ]);
+
+  const words = query
+    .replace(/[^\w\s]/g, ' ')
+    .split(/\s+/)
+    .map(w => w.trim().toLowerCase())
+    .filter(w => w.length > 2 && !stopwords.has(w));
+
+  if (words.length > 0) {
+    intent.keywords = words.slice(0, 3).join(' ');
+  }
 
   return intent;
 }
 
-function generateExplanation(listing: { title: string; currentPrice: string | null; startingPrice: string; condition: string; closingAt: Date }, intent: ParsedIntent): string {
+function generateExplanation(listing: { title: string; currentPrice: unknown; startingPrice: unknown; condition: string; closingAt: Date }, intent: ParsedIntent): string {
   const parts: string[] = [];
-  const price = listing.currentPrice || listing.startingPrice;
+  const rawPrice = listing.currentPrice || listing.startingPrice;
+  const price = rawPrice ? new Decimal(rawPrice as any) : new Decimal(0);
   
   if (intent.category) parts.push(`matches your ${intent.category.toLowerCase().replace('_', ' ')} category`);
-  if (intent.maxPrice) parts.push(`within your ₹${intent.maxPrice.toLocaleString('en-IN')} budget (current: ₹${new Decimal(price).toFixed(0)})`);
+  if (intent.maxPrice) parts.push(`within your ₹${intent.maxPrice.toLocaleString('en-IN')} budget (current: ₹${price.toFixed(0)})`);
   if (intent.condition) parts.push(`condition is ${listing.condition.toLowerCase().replace('_', ' ')}`);
   
   const minsLeft = Math.round((new Date(listing.closingAt).getTime() - Date.now()) / 60000);
@@ -84,9 +113,10 @@ function generateExplanation(listing: { title: string; currentPrice: string | nu
   return parts.length > 0 ? `Matches because it ${parts.join(', ')}.` : 'Good match for your query.';
 }
 
-function suggestBid(listing: { currentPrice: string | null; startingPrice: string; minIncrement: string }): string {
-  const current = new Decimal(listing.currentPrice || listing.startingPrice);
-  const increment = new Decimal(listing.minIncrement);
+function suggestBid(listing: { currentPrice: unknown; startingPrice: unknown; minIncrement: unknown }): string {
+  const rawCurrent = listing.currentPrice || listing.startingPrice;
+  const current = rawCurrent ? new Decimal(rawCurrent as any) : new Decimal(0);
+  const increment = new Decimal(listing.minIncrement as any);
   const suggested = current.plus(increment);
   return suggested.toFixed(2);
 }
@@ -137,7 +167,7 @@ router.post('/assistant', optionalAuth, aiLimiter, async (req: AuthenticatedRequ
   }
 
   const listings = await prisma.listing.findMany({
-    where: where as Parameters<typeof prisma.listing.findMany>[0]['where'],
+    where: where as any,
     orderBy: [{ currentPrice: 'asc' }, { closingAt: 'asc' }],
     take: 6,
     include: {
@@ -149,8 +179,8 @@ router.post('/assistant', optionalAuth, aiLimiter, async (req: AuthenticatedRequ
 
   const results = listings.map((listing) => ({
     listing,
-    explanation: generateExplanation(listing as Parameters<typeof generateExplanation>[0], intent),
-    suggestedBid: suggestBid(listing as Parameters<typeof suggestBid>[0]),
+    explanation: generateExplanation(listing, intent),
+    suggestedBid: suggestBid(listing),
     matchScore: [
       intent.category && listing.category === intent.category ? 30 : 0,
       intent.condition && listing.condition === intent.condition ? 20 : 0,
@@ -171,7 +201,7 @@ router.post('/assistant', optionalAuth, aiLimiter, async (req: AuthenticatedRequ
 
 // GET /api/ai/fair-play/:listingId — Fair-Play Insights
 router.get('/fair-play/:listingId', async (req, res: Response): Promise<void> => {
-  const { listingId } = req.params;
+  const listingId = req.params.listingId as string;
 
   const listing = await prisma.listing.findUnique({
     where: { id: listingId },

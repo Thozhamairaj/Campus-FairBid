@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import prisma from '../lib/prisma';
 
-export interface AuthenticatedRequest extends Request {
+export interface AuthenticatedRequest<P = Record<string, string>> extends Request<P> {
   user?: {
     id: string;
     email: string;
