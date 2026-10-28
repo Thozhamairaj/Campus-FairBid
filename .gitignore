@@ -1,1 +1,22 @@
-node_modules/\ndist/\n.env\n*.log\nprisma/migrations/\n.DS_Store
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment
+.env
+
+# Logs
+*.log
+
+# Prisma migrations (auto-generated)
+prisma/migrations/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
