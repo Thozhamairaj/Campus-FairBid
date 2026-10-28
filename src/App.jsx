@@ -25,6 +25,7 @@ function HomeWrapper() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const query = searchParams.get('search') || '';
+  const closingSoon = searchParams.get('closingSoon') === 'true';
 
   function handleSearch(q) {
     if (q) navigate(`/?search=${encodeURIComponent(q)}`);
@@ -34,7 +35,7 @@ function HomeWrapper() {
   return (
     <>
       <Navbar onSearch={handleSearch} searchValue={query} />
-      <HomePage searchQuery={query} />
+      <HomePage searchQuery={query} closingSoonOnly={closingSoon} />
     </>
   );
 }

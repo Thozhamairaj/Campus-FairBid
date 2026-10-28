@@ -35,6 +35,7 @@ const ListingsQuerySchema = z.object({
   sellerId: z.string().uuid().optional(),
   sortBy: z.enum(['closingAt', 'currentPrice', 'createdAt']).default('closingAt'),
   sortOrder: z.enum(['asc', 'desc']).default('asc'),
+  excludeIds: z.string().optional(),
 });
 
 // GET /api/listings
@@ -45,7 +46,7 @@ router.get('/', optionalAuth, async (req: AuthenticatedRequest, res: Response): 
     return;
   }
 
-  const { page, limit, category, condition, minPrice, maxPrice, closingSoon, search, status, sellerId, sortBy, sortOrder } = result.data;
+  const { page, limit, category, condition, minPrice, maxPrice, closingSoon, search, status, sellerId, sortBy, sortOrder, excludeIds } = result.data;
 
   const where: Record<string, unknown> = {};
   
@@ -72,6 +73,13 @@ router.get('/', optionalAuth, async (req: AuthenticatedRequest, res: Response): 
       { title: { contains: search, mode: 'insensitive' } },
       { description: { contains: search, mode: 'insensitive' } },
     ];
+  }
+
+  if (excludeIds) {
+    const ids = excludeIds.split(',').map(s => s.trim()).filter(Boolean);
+    if (ids.length > 0) {
+      where.id = { notIn: ids };
+    }
   }
 
   const [listings, total] = await Promise.all([

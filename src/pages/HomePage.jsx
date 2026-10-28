@@ -16,7 +16,7 @@ const CATEGORY_LABELS = {
   OTHER: '📦 Other',
 };
 
-export default function HomePage({ searchQuery }) {
+export default function HomePage({ searchQuery, closingSoonOnly = false }) {
   const { user } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
@@ -97,29 +97,48 @@ export default function HomePage({ searchQuery }) {
       const params = new URLSearchParams({ limit: '12', sortBy: 'createdAt', sortOrder: 'desc' });
       if (selectedCategory) params.set('category', selectedCategory);
       if (searchQuery) params.set('search', searchQuery);
+      if (closingSoonOnly) params.set('closingSoon', 'true');
 
-      const [listingsRes, closingRes] = await Promise.all([
-        api.get(`/listings?${params}`),
-        api.get('/listings?closingSoon=true&limit=4&sortBy=closingAt&sortOrder=asc'),
-      ]);
+      let closingItems = [];
+      // Only fetch the top "Closing Soon" preview strip in normal browse mode
+      if (!searchQuery && !closingSoonOnly) {
+        try {
+          const closingRes = await api.get('/listings?closingSoon=true&limit=4&sortBy=closingAt&sortOrder=asc');
+          closingItems = closingRes.data?.listings || [];
+          setClosingSoon(closingItems);
+        } catch (e) {
+          console.error('Failed to fetch closing soon listings:', e);
+        }
+      } else {
+        setClosingSoon([]);
+      }
 
-      setListings(listingsRes.data.listings);
-      setClosingSoon(closingRes.data.listings);
+      // Products shown in Closing Soon are excluded from the Browse section
+      if (closingItems.length > 0) {
+        params.set('excludeIds', closingItems.map(l => l.id).join(','));
+      }
+
+      const listingsRes = await api.get(`/listings?${params}`);
+      setListings(listingsRes.data?.listings || []);
       setStats({
-        total: listingsRes.data.pagination.total,
+        total: listingsRes.data?.pagination?.total || 0,
         categories: Object.keys(CATEGORY_LABELS).length,
-        bids: listingsRes.data.listings.reduce((s, l) => s + (l._count?.bids || 0), 0),
+        bids: (listingsRes.data?.listings || []).reduce((s, l) => s + (l._count?.bids || 0), 0),
       });
     } catch (err) {
       console.error('Failed to fetch listings:', err);
     } finally {
       setLoading(false);
     }
-  }, [selectedCategory, searchQuery]);
+  }, [selectedCategory, searchQuery, closingSoonOnly]);
 
   useEffect(() => {
     fetchListings();
   }, [fetchListings]);
+
+  // Exclude products that are currently displayed in the "Closing Soon" section
+  const closingSoonIds = new Set(closingSoon.map((item) => item.id));
+  const browseListings = listings.filter((item) => !closingSoonIds.has(item.id));
 
   return (
     <>
@@ -206,9 +225,20 @@ export default function HomePage({ searchQuery }) {
         {/* Browse All */}
         <section style={{ paddingTop: 40, paddingBottom: 40 }}>
           <div className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-            <h2 className="section-title">
-              {searchQuery ? `Results for "${searchQuery}"` : 'Browse Auctions'}
-            </h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <h2 className="section-title" style={{ margin: 0 }}>
+                {searchQuery
+                  ? `Results for "${searchQuery}"`
+                  : closingSoonOnly
+                  ? '⏰ All Auctions Closing Soon'
+                  : 'Browse Auctions'}
+              </h2>
+              {closingSoonOnly && (
+                <Link to="/" className="btn btn-secondary btn-sm" style={{ padding: '4px 10px', fontSize: 12 }}>
+                  ← Show All Auctions
+                </Link>
+              )}
+            </div>
             {searchQuery && (
               <button
                 type="button"
@@ -255,7 +285,7 @@ export default function HomePage({ searchQuery }) {
                 </div>
               ))}
             </div>
-          ) : listings.length === 0 ? (
+          ) : browseListings.length === 0 ? (
             searchQuery ? (
               <div
                 className="card card-body"
@@ -301,14 +331,18 @@ export default function HomePage({ searchQuery }) {
             ) : (
               <div className="empty-state">
                 <div className="empty-state-icon">🔍</div>
-                <h3>No listings found</h3>
-                <p>Try a different search or category, or be the first to list!</p>
+                <h3>{closingSoonOnly ? 'No other auctions closing soon' : 'No additional listings found'}</h3>
+                <p>
+                  {closingSoon.length > 0
+                    ? 'All currently active listings are featured in the Closing Soon section above.'
+                    : 'Try a different search or category, or be the first to list!'}
+                </p>
                 <Link to="/create" className="btn btn-primary mt-4">Create Listing</Link>
               </div>
             )
           ) : (
             <div className="grid-cards">
-              {listings.map(listing => (
+              {browseListings.map(listing => (
                 <ListingCard key={listing.id} listing={listing} />
               ))}
             </div>
