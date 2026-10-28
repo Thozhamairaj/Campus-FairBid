@@ -19,6 +19,14 @@ import { runAuctionCloser } from './services/auctionCloser';
 import { errorHandler } from './middleware/errorHandler';
 import { authenticate } from './middleware/auth';
 
+// Prevent unhandled promise rejections from crashing the process
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[UnhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[UncaughtException]', err);
+});
+
 const app = express();
 const httpServer = createServer(app);
 

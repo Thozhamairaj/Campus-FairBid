@@ -35,7 +35,7 @@ async function placeBid(listingId: string, bidderId: string, amount: number): Pr
       const currentPrice = l.currentPrice ? new Decimal(l.currentPrice) : null;
 
       if (currentPrice === null) {
-        if (bidAmount.lessThan(startingPrice)) throw new Error(`First bid must be >= ₹${startingPrice}`);
+        if (bidAmount.lessThan(startingPrice)) throw new Error(`First bid must be at or above the starting price of ₹${startingPrice}`);
       } else {
         const minRequired = currentPrice.plus(minIncrement);
         if (bidAmount.lessThan(minRequired)) throw new Error(`Bid must be >= ₹${minRequired}`);
