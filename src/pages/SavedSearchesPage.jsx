@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { BookMarked, Plus, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { BookMarked, Plus, Trash2, Search } from 'lucide-react';
 import api from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 
@@ -133,8 +134,8 @@ export default function SavedSearchesPage() {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {searches.map(s => (
-              <div key={s.id} className="card card-body" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-                <div>
+              <div key={s.id} className="card card-body" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 200 }}>
                   <div style={{ fontWeight: 700, marginBottom: 6 }}>{s.name}</div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     {s.category && <span className="badge badge-gray">{CATEGORIES[s.category]}</span>}
@@ -144,9 +145,18 @@ export default function SavedSearchesPage() {
                     {s.closingSoon && <span className="badge badge-red">Closing soon</span>}
                   </div>
                 </div>
-                <button className="btn btn-secondary btn-icon" onClick={() => deleteSearch(s.id)} aria-label="Delete saved search">
-                  <Trash2 size={16} />
-                </button>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <Link
+                    to={`/?search=${encodeURIComponent(s.keywords || s.name)}`}
+                    className="btn btn-secondary btn-sm"
+                    style={{ gap: 6 }}
+                  >
+                    <Search size={14} /> View Listings
+                  </Link>
+                  <button className="btn btn-secondary btn-icon" onClick={() => deleteSearch(s.id)} aria-label="Delete saved search">
+                    <Trash2 size={16} />
+                  </button>
+                </div>
               </div>
             ))}
           </div>

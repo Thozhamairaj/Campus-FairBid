@@ -31,6 +31,18 @@ router.post('/', async (req: AuthenticatedRequest, res: Response): Promise<void>
     return;
   }
 
+  // Check if identical search already exists for this user
+  const existing = await prisma.savedSearch.findFirst({
+    where: {
+      userId: req.user!.id,
+      name: { equals: result.data.name, mode: 'insensitive' },
+    },
+  });
+  if (existing) {
+    res.status(200).json({ search: existing, alreadySaved: true });
+    return;
+  }
+
   const count = await prisma.savedSearch.count({ where: { userId: req.user!.id } });
   if (count >= 10) {
     res.status(400).json({ error: 'Maximum 10 saved searches allowed' });

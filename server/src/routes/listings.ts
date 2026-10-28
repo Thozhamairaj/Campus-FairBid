@@ -208,8 +208,10 @@ router.post('/', authenticate, async (req: AuthenticatedRequest, res: Response):
     return newListing;
   });
 
-  // Notify saved search watchers (async)
-  notifyMatchingSavedSearches(listing.id).catch(console.error);
+  const io = req.app.get('io');
+
+  // Notify saved search watchers (async) with real-time socket updates
+  notifyMatchingSavedSearches(listing.id, io).catch(console.error);
 
   const fullListing = await prisma.listing.findUnique({
     where: { id: listing.id },
@@ -219,7 +221,6 @@ router.post('/', authenticate, async (req: AuthenticatedRequest, res: Response):
     },
   });
 
-  const io = req.app.get('io');
   io?.emit('listing:created', { listing: fullListing });
 
   res.status(201).json({ listing: fullListing });

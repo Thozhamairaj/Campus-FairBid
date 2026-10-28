@@ -36,23 +36,37 @@ export async function notifyMatchingSavedSearches(
     },
   });
 
-  // Filter by keyword if specified
+  // Filter by keyword if specified (support full phrase and individual word matching)
   const matchingSearches = searches.filter((s) => {
-    if (!s.keywords) return true;
-    const kw = s.keywords.toLowerCase();
-    return (
-      listing.title.toLowerCase().includes(kw) ||
-      listing.description.toLowerCase().includes(kw)
-    );
+    const rawKw = (s.keywords || s.name || '').trim().toLowerCase();
+    if (!rawKw) return true;
+
+    const titleLower = listing.title.toLowerCase();
+    const descLower = listing.description.toLowerCase();
+    const fullText = `${titleLower} ${descLower}`;
+
+    // Direct phrase match
+    if (fullText.includes(rawKw)) return true;
+
+    // Tokenized word-by-word match
+    const words = rawKw.split(/\s+/).filter((w) => w.length > 1);
+    if (words.length > 0 && words.every((w) => fullText.includes(w))) {
+      return true;
+    }
+
+    return false;
   });
 
-  const notifs = matchingSearches.map((s) => ({
-    userId: s.userId,
-    type: 'NEW_LISTING_MATCH' as const,
-    title: '🔔 New listing matches your search!',
-    message: `"${listing.title}" matches your saved search "${s.name}". Starting at ₹${new Decimal(listing.startingPrice).toFixed(0)}.`,
-    listingId: listing.id,
-  }));
+  const notifs = matchingSearches.map((s) => {
+    const queryTerm = s.keywords || s.name;
+    return {
+      userId: s.userId,
+      type: 'NEW_LISTING_MATCH' as const,
+      title: '🔔 Your searched product is now available!',
+      message: `"${listing.title}" is now available on FairBid, matching your search for "${queryTerm}". Starting at ₹${new Decimal(listing.startingPrice).toFixed(0)}.`,
+      listingId: listing.id,
+    };
+  });
 
   if (notifs.length > 0) {
     await createBulkNotifications(notifs, io);

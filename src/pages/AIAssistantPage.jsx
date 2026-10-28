@@ -263,7 +263,7 @@ export default function AIAssistantPage() {
         <div style={{ fontSize: 12, color: 'var(--color-navy-muted)', textAlign: 'center', lineHeight: 1.5 }}>
           🤖 This assistant uses rule-based intent matching to search real database records.
           It never invents listings or prices. All bids require explicit confirmation.
-          {!process.env.VITE_OPENAI_KEY && ' (Running in offline mode — no external AI API)'}
+          {!import.meta.env?.VITE_OPENAI_KEY && ' (Running in offline mode — no external AI API)'}
         </div>
       </div>
     </div>

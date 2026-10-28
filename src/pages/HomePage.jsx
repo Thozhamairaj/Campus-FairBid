@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
-import { ArrowRight, Zap, Shield, Clock, TrendingUp } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ArrowRight, Zap, Shield, Clock, TrendingUp, Bell, BookmarkCheck } from 'lucide-react';
 import api from '../lib/api';
 import ListingCard from '../components/ListingCard';
 import { CountdownTimer } from '../components/CountdownTimer';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
 
 const CATEGORY_LABELS = {
   BICYCLE: '🚲 Bicycles',
@@ -17,11 +18,78 @@ const CATEGORY_LABELS = {
 
 export default function HomePage({ searchQuery }) {
   const { user } = useAuth();
+  const toast = useToast();
+  const navigate = useNavigate();
   const [listings, setListings] = useState([]);
   const [closingSoon, setClosingSoon] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState('');
   const [stats, setStats] = useState({ total: 0, categories: 0, bids: 0 });
+  const [savedSearches, setSavedSearches] = useState([]);
+  const [savingSearch, setSavingSearch] = useState(false);
+
+  // Load existing saved searches when user is authenticated
+  const fetchSavedSearches = useCallback(async () => {
+    if (!user) {
+      setSavedSearches([]);
+      return;
+    }
+    try {
+      const { data } = await api.get('/saved-searches');
+      setSavedSearches(data.searches || []);
+    } catch {
+      // ignore
+    }
+  }, [user]);
+
+  useEffect(() => {
+    fetchSavedSearches();
+  }, [fetchSavedSearches]);
+
+  const isCurrentSearchSaved = Boolean(
+    searchQuery &&
+      savedSearches.some(
+        (s) =>
+          (s.keywords && s.keywords.toLowerCase() === searchQuery.trim().toLowerCase()) ||
+          (s.name && s.name.toLowerCase() === searchQuery.trim().toLowerCase())
+      )
+  );
+
+  async function handleSaveSearch(term) {
+    const query = (term || searchQuery || '').trim();
+    if (!query) return;
+
+    if (!user) {
+      toast.info('Please sign in to save this search and get notified when it is available.');
+      navigate('/login');
+      return;
+    }
+
+    if (isCurrentSearchSaved) {
+      toast.info(`You are already subscribed to alerts for "${query}".`);
+      return;
+    }
+
+    setSavingSearch(true);
+    try {
+      const { data } = await api.post('/saved-searches', {
+        name: query,
+        keywords: query,
+        category: selectedCategory ? selectedCategory : undefined,
+      });
+
+      if (data.alreadySaved) {
+        toast.info(`Search for "${query}" was already saved.`);
+      } else {
+        setSavedSearches((prev) => [data.search, ...prev]);
+        toast.success(`Alert set! We will notify you as soon as "${query}" is available.`);
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to save search');
+    } finally {
+      setSavingSearch(false);
+    }
+  }
 
   const fetchListings = useCallback(async () => {
     setLoading(true);
@@ -137,10 +205,22 @@ export default function HomePage({ searchQuery }) {
 
         {/* Browse All */}
         <section style={{ paddingTop: 40, paddingBottom: 40 }}>
-          <div className="section-header">
+          <div className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
             <h2 className="section-title">
               {searchQuery ? `Results for "${searchQuery}"` : 'Browse Auctions'}
             </h2>
+            {searchQuery && (
+              <button
+                type="button"
+                className={`btn btn-sm ${isCurrentSearchSaved ? 'btn-secondary' : 'btn-primary'}`}
+                onClick={() => handleSaveSearch(searchQuery)}
+                disabled={savingSearch || isCurrentSearchSaved}
+                style={{ gap: 6 }}
+              >
+                {isCurrentSearchSaved ? <BookmarkCheck size={16} /> : <Bell size={16} />}
+                {isCurrentSearchSaved ? 'Alert Active (Search Saved)' : 'Notify Me on New Listings'}
+              </button>
+            )}
           </div>
 
           {/* Category Filter */}
@@ -176,12 +256,56 @@ export default function HomePage({ searchQuery }) {
               ))}
             </div>
           ) : listings.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-state-icon">🔍</div>
-              <h3>No listings found</h3>
-              <p>Try a different search or category, or be the first to list!</p>
-              <Link to="/create" className="btn btn-primary mt-4">Create Listing</Link>
-            </div>
+            searchQuery ? (
+              <div
+                className="card card-body"
+                style={{
+                  maxWidth: 580,
+                  margin: '32px auto',
+                  padding: '40px 24px',
+                  textAlign: 'center',
+                  background: 'var(--color-surface)',
+                  border: '1px solid var(--color-border)',
+                }}
+              >
+                <div style={{ fontSize: 44, marginBottom: 12 }}>🔔</div>
+                <h3 style={{ fontSize: 20, fontWeight: 700, marginBottom: 8, color: 'var(--color-navy)' }}>
+                  "{searchQuery}" is not available right now
+                </h3>
+                <p style={{ color: 'var(--color-navy-muted)', fontSize: 14, lineHeight: 1.6, maxWidth: 460, margin: '0 auto 24px' }}>
+                  No campus listings match your search currently. Save this search and we will automatically notify you as soon as someone lists it!
+                </p>
+
+                <div style={{ display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className={`btn btn-lg ${isCurrentSearchSaved ? 'btn-secondary' : 'btn-primary'}`}
+                    onClick={() => handleSaveSearch(searchQuery)}
+                    disabled={savingSearch || isCurrentSearchSaved}
+                    style={{ gap: 8 }}
+                  >
+                    {isCurrentSearchSaved ? <BookmarkCheck size={18} /> : <Bell size={18} />}
+                    {isCurrentSearchSaved ? '✓ We will notify you when available' : 'Notify Me When Available'}
+                  </button>
+                  <Link to="/create" className="btn btn-secondary btn-lg">
+                    List It Yourself
+                  </Link>
+                </div>
+
+                {isCurrentSearchSaved && (
+                  <div style={{ marginTop: 20, padding: '8px 14px', background: 'rgba(34, 197, 94, 0.1)', color: '#16a34a', borderRadius: 'var(--radius-md)', fontSize: 13, fontWeight: 600, display: 'inline-block' }}>
+                    ✓ Search saved! You will receive an alert in your notification bell when a matching item is posted.
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="empty-state">
+                <div className="empty-state-icon">🔍</div>
+                <h3>No listings found</h3>
+                <p>Try a different search or category, or be the first to list!</p>
+                <Link to="/create" className="btn btn-primary mt-4">Create Listing</Link>
+              </div>
+            )
           ) : (
             <div className="grid-cards">
               {listings.map(listing => (
