@@ -1,0 +1,291 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  STUDENT
+  ADMIN
+}
+
+enum ListingCondition {
+  NEW
+  LIKE_NEW
+  GOOD
+  FAIR
+  POOR
+}
+
+enum ListingCategory {
+  BICYCLE
+  CALCULATOR
+  BOOKS
+  ELECTRONICS
+  HOSTEL_ESSENTIALS
+  OTHER
+}
+
+enum AuctionStatus {
+  ACTIVE
+  CLOSED_UNSOLD
+  PENDING_SELLER_DECISION
+  RESERVED_FOR_WINNER
+  SOLD
+  REJECTED
+  CANCELLED
+  FAILED_PICKUP
+}
+
+enum NotificationType {
+  OUTBID
+  AUCTION_WON
+  AUCTION_CLOSED
+  NEW_LISTING_MATCH
+  SELLER_APPROVED
+  SELLER_REJECTED
+  HANDOVER_REQUESTED
+  HANDOVER_CONFIRMED
+  BID_ACCEPTED
+  DEADLINE_EXTENDED
+  QUESTION_ANSWERED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         UserRole @default(STUDENT)
+  college      String   @default("Campus University")
+  hostel       String?
+  phone        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  listings            Listing[]
+  bids                Bid[]
+  autoBids            AutoBid[]
+  questions           Question[]
+  answers             Answer[]
+  savedSearches       SavedSearch[]
+  watchlist           Watchlist[]
+  notifications       Notification[]
+  sellerDecisions     SellerDecision[]
+  handoversSeller     HandoverConfirmation[] @relation("SellerHandover")
+  handoversBuyer      HandoverConfirmation[] @relation("BuyerHandover")
+
+  @@index([email])
+}
+
+model Listing {
+  id            String           @id @default(uuid())
+  title         String
+  description   String
+  category      ListingCategory
+  condition     ListingCondition
+  startingPrice Decimal          @db.Decimal(12, 2)
+  minIncrement  Decimal          @db.Decimal(12, 2)
+  closingAt     DateTime
+  status        AuctionStatus    @default(ACTIVE)
+  viewCount     Int              @default(0)
+  
+  // Anti-sniping: track extensions
+  extensionCount Int     @default(0)
+  originalClosingAt DateTime?
+  
+  // Current leading bid (denormalized for performance)
+  currentPrice  Decimal?         @db.Decimal(12, 2)
+  leadingBidId  String?
+  
+  sellerId      String
+  seller        User             @relation(fields: [sellerId], references: [id])
+  
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  cancelledAt   DateTime?
+  cancelReason  String?
+
+  images        ListingImage[]
+  bids          Bid[]
+  autoBids      AutoBid[]
+  questions     Question[]
+  watchlist     Watchlist[]
+  notifications Notification[]
+  statusHistory AuctionStatusHistory[]
+  sellerDecision SellerDecision?
+  handover       HandoverConfirmation?
+
+  @@index([status, closingAt])
+  @@index([category])
+  @@index([sellerId])
+  @@index([currentPrice])
+}
+
+model ListingImage {
+  id        String  @id @default(uuid())
+  listingId String
+  url       String
+  alt       String?
+  order     Int     @default(0)
+  
+  listing   Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  
+  @@index([listingId])
+}
+
+model Bid {
+  id        String   @id @default(uuid())
+  listingId String
+  bidderId  String
+  amount    Decimal  @db.Decimal(12, 2)
+  isAuto    Boolean  @default(false)  // placed by auto-bidding engine
+  createdAt DateTime @default(now())
+
+  listing   Listing  @relation(fields: [listingId], references: [id])
+  bidder    User     @relation(fields: [bidderId], references: [id])
+
+  @@index([listingId, createdAt])
+  @@index([bidderId])
+  @@index([listingId, amount])
+}
+
+// Auto-bidding proxy instruction
+model AutoBid {
+  id          String   @id @default(uuid())
+  listingId   String
+  bidderId    String
+  maxAmount   Decimal  @db.Decimal(12, 2)
+  isActive    Boolean  @default(true)
+  cancelledAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  listing     Listing  @relation(fields: [listingId], references: [id])
+  bidder      User     @relation(fields: [bidderId], references: [id])
+
+  @@unique([listingId, bidderId])  // one active auto-bid per user per listing
+  @@index([listingId, isActive])
+}
+
+model Question {
+  id         String    @id @default(uuid())
+  listingId  String
+  askerId    String
+  text       String    @db.VarChar(500)
+  isAnswered Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  listing    Listing   @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  asker      User      @relation(fields: [askerId], references: [id])
+  answer     Answer?
+
+  @@index([listingId])
+}
+
+model Answer {
+  id         String   @id @default(uuid())
+  questionId String   @unique
+  sellerId   String
+  text       String   @db.VarChar(1000)
+  createdAt  DateTime @default(now())
+
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  seller     User     @relation(fields: [sellerId], references: [id])
+}
+
+model SavedSearch {
+  id          String          @id @default(uuid())
+  userId      String
+  name        String
+  keywords    String?
+  category    ListingCategory?
+  maxPrice    Decimal?        @db.Decimal(12, 2)
+  condition   ListingCondition?
+  closingSoon Boolean         @default(false)  // within 24h
+  createdAt   DateTime        @default(now())
+
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Watchlist {
+  id        String   @id @default(uuid())
+  userId    String
+  listingId String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, listingId])
+  @@index([userId])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String
+  listingId String?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listing   Listing?         @relation(fields: [listingId], references: [id], onDelete: SetNull)
+
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+model AuctionStatusHistory {
+  id        String        @id @default(uuid())
+  listingId String
+  status    AuctionStatus
+  reason    String?
+  createdAt DateTime      @default(now())
+
+  listing   Listing       @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@index([listingId])
+}
+
+model SellerDecision {
+  id          String   @id @default(uuid())
+  listingId   String   @unique
+  sellerId    String
+  approved    Boolean
+  reason      String?
+  decidedAt   DateTime @default(now())
+
+  listing     Listing  @relation(fields: [listingId], references: [id])
+  seller      User     @relation(fields: [sellerId], references: [id])
+}
+
+model HandoverConfirmation {
+  id             String    @id @default(uuid())
+  listingId      String    @unique
+  sellerId       String
+  buyerId        String
+  sellerConfirmed Boolean  @default(false)
+  buyerConfirmed  Boolean  @default(false)
+  location        String?
+  scheduledAt     DateTime?
+  completedAt     DateTime?
+  failedAt        DateTime?
+  failReason      String?
+  createdAt       DateTime  @default(now())
+
+  listing   Listing  @relation(fields: [listingId], references: [id])
+  seller    User     @relation("SellerHandover", fields: [sellerId], references: [id])
+  buyer     User     @relation("BuyerHandover", fields: [buyerId], references: [id])
+}
